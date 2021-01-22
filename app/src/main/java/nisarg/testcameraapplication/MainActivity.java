@@ -4,6 +4,7 @@ import android.hardware.Camera;
 import android.hardware.Camera.PictureCallback;
 import android.hardware.Camera.Parameters;
 
+import android.os.SystemClock;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
 import android.util.Log;
@@ -25,7 +26,7 @@ import java.lang.Math;
 import java.util.concurrent.Semaphore;
 
 
-public class MainActivity extends AppCompatActivity implements PictureCallback, SurfaceHolder.Callback {
+public class MainActivity extends AppCompatActivity implements PictureCallback, SurfaceHolder.Callback, Camera.ShutterCallback {
 
     private Camera mCamera;
     private ImageView mCameraImage;
@@ -33,9 +34,11 @@ public class MainActivity extends AppCompatActivity implements PictureCallback, 
     private Button mCaptureImageButton;
     private byte[] mCameraData;
     private boolean mIsCapturing;
+    private boolean safeToCapture;
     private Parameters mCameraParams;
     private Semaphore mCameraSemaphore;
     private SurfaceHolder surfaceHolder;
+    private int picSaved = 0;
 
     private PictureSaver picHandler;
 
@@ -49,21 +52,40 @@ public class MainActivity extends AppCompatActivity implements PictureCallback, 
             int minExposure = mCameraParams.getMinExposureCompensation();
             int maxExposure = mCameraParams.getMaxExposureCompensation();
             int numExposure = Math.abs(maxExposure)  + Math.abs(minExposure) + 1;
-            Thread[] threads= new Thread[numExposure];
+            //Thread[] threads= new Thread[numExposure];
             int thCount = 0;
-            //mCamera.startPreview();
+            mCamera.startPreview();
+            try {
+                mCamera.reconnect();
+            } catch (IOException e) {
 
+            }
+            mCamera.startPreview();
             //Release camera to allow background thread to take picture
-            releaseCamera();
+            //releaseCamera();
 
 
             for(int i = minExposure; i <= maxExposure; i += 1){
                 mCameraParams.setExposureCompensation(i);
+                safeToCapture = false;
+                mCamera.setParameters(mCameraParams);
+                Log.d("setupCamera", "Taking a pic");
+                //mCamera.takePicture(this, this, null);
+                //mCamera.takePicture(null, null, null);
+                picHandler.updateCamParams(mCameraParams);
+                //mCamera.takePicture(picHandler, MainActivity.this, null);
+                captureImage();
+                mCamera.startPreview();
+                while(safeToCapture == false){};
+                //while(picHandler.picSaved == 0){};
+                //mCamera.stopPreview();
+
                 //Log.d("OnClickListener", "Exposure: " + Integer.toString(mCameraParams.getExposureCompensation()));
-                picHandler.updateCamParams(mCameraParams, mCameraSemaphore, surfaceHolder);
+
+                /*picHandler.updateCamParams(mCameraParams, mCameraSemaphore, surfaceHolder);
                 threads[thCount] = new Thread(picHandler);
                 threads[thCount].start();
-                thCount++;
+                thCount++;*/
                 /*
                 Thread thread = new Thread(picHandler);
 
@@ -91,14 +113,14 @@ public class MainActivity extends AppCompatActivity implements PictureCallback, 
                 }
                 mCamera.stopPreview();*/
             }
-            for(int i = 0; i < numExposure; i++ ){
+            /*for(int i = 0; i < numExposure; i++ ){
                 try {
                     threads[i].join();
                 }
                 catch (Exception e) {
                     Log.d("OnClickListener", "Created thread won't join");
                 }
-            }
+            }*/
 
             if(safeCameraOpen(0)){
                 mCamera.startPreview();
@@ -155,6 +177,7 @@ public class MainActivity extends AppCompatActivity implements PictureCallback, 
                 mCamera.setPreviewDisplay(holder);
                 if (mIsCapturing) {
                     mCamera.startPreview();
+                    safeToCapture = true;
                 }
             } catch (IOException e) {
                 Toast.makeText(MainActivity.this, "Unable to start camera preview.",
@@ -191,14 +214,18 @@ public class MainActivity extends AppCompatActivity implements PictureCallback, 
     }
 
     private void captureImage() {
-        mCamera.takePicture(null, this, null);
+        mCamera.takePicture(picHandler, picHandler, null);
     }
 
     @Override
     public void onPictureTaken(byte[] data, Camera camera) {
         Log.d("OnClickListener", "Exposure: " + Integer.toString(mCameraParams.getExposureCompensation()));
-        test ++;
         mCameraData = data;
+        safeToCapture = true;
     }
 
+    @Override
+    public void onShutter() {
+        Log.d("PictureSaver", "Inside shutter callback");
+    }
 }

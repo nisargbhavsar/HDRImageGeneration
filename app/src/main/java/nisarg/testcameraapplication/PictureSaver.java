@@ -21,7 +21,7 @@ import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.concurrent.Semaphore;
 
-public class PictureSaver implements PictureCallback, Runnable, SurfaceHolder.Callback {
+public class PictureSaver implements PictureCallback, Camera.ShutterCallback {
 
     private Parameters params;
     private Camera mCamera;
@@ -32,7 +32,7 @@ public class PictureSaver implements PictureCallback, Runnable, SurfaceHolder.Ca
     public static final int MEDIA_TYPE_VIDEO = 2;
 
     public byte[] mCameraData;
-    public int test = -1;
+    public int picSaved = 0;
     private volatile int camCallback = 0;
     Semaphore sem;
 
@@ -41,13 +41,13 @@ public class PictureSaver implements PictureCallback, Runnable, SurfaceHolder.Ca
         //surfaceTexture = new SurfaceTexture(0);
     }
 
-    public void updateCamParams(Parameters inputParams, Semaphore inputSem, SurfaceHolder inputCamView){
+    public void updateCamParams(Parameters inputParams){
         params = inputParams;
-        sem = inputSem;
+        /*sem = inputSem;
 
         surfaceHolder = inputCamView;
         surfaceHolder.addCallback(this);
-        surfaceHolder.setType(SurfaceHolder.SURFACE_TYPE_PUSH_BUFFERS);
+        surfaceHolder.setType(SurfaceHolder.SURFACE_TYPE_PUSH_BUFFERS);*/
     }
 
     private boolean safeCameraOpen(int id) {
@@ -86,9 +86,11 @@ public class PictureSaver implements PictureCallback, Runnable, SurfaceHolder.Ca
 
     @Override
     public void onPictureTaken(byte[] data, Camera camera) {
-        Log.d("onPictureTaken: ", "Hit breakpoint.");
+        Parameters inputCamParams = camera.getParameters();
+
+        Log.d("OnPictureListener", "Exposure: " + Integer.toString(inputCamParams.getExposureCompensation()));
         mCameraData = data;
-        releaseCamera();
+//        releaseCamera();
 
         /*File pictureFile = getOutputMediaFile(MEDIA_TYPE_IMAGE);
         if (pictureFile == null){
@@ -106,6 +108,8 @@ public class PictureSaver implements PictureCallback, Runnable, SurfaceHolder.Ca
             Log.d("onPictureTaken: ", "Error accessing file: " + e.getMessage());
         }*/
         Log.d("onPictureTaken: ", "Succeeded in saving picture");
+        picSaved = 1;
+
     }
 
     public void setupCamera(){
@@ -120,21 +124,21 @@ public class PictureSaver implements PictureCallback, Runnable, SurfaceHolder.Ca
         //mCamera.takePicture(this, this, null);
         mCamera.takePicture(null, this, null);
     }
-
+/*
     @Override
     public void run(){
         setupCamera();
         while(mCameraData == null){
             camCallback++;
-            /*try {
+            try {
                 //Log.d("ThreadRun", "Thread is sleeping");
                 //Thread.sleep(500);
             } catch (InterruptedException e) {
                 Log.d("ThreadRun", "Error in sleeping.");
-            }*/
+            }
         }
         sem.release();
-        /*File pictureFile = getOutputMediaFile(MEDIA_TYPE_IMAGE);
+        File pictureFile = getOutputMediaFile(MEDIA_TYPE_IMAGE);
         if (pictureFile == null){
             Log.d(TAG, "Error creating media file, check storage permissions");
             return;
@@ -148,10 +152,10 @@ public class PictureSaver implements PictureCallback, Runnable, SurfaceHolder.Ca
             Log.d("Picture", "File not found: " + e.getMessage());
         } catch (IOException e) {
             Log.d(TAG, "Error accessing file: " + e.getMessage());
-        }*/
+        }
 
 
-    }
+    }*/
 
 
     /** Create a file Uri for saving an image or video */
@@ -194,25 +198,7 @@ public class PictureSaver implements PictureCallback, Runnable, SurfaceHolder.Ca
     }
 
     @Override
-    public void surfaceCreated(SurfaceHolder holder) {
-
-    }
-
-    @Override
-    public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
-        if (mCamera != null) {
-            try {
-                mCamera.setPreviewDisplay(holder);
-                    mCamera.startPreview();
-            } catch (IOException e) {
-                //Toast.makeText("PictureSaver", "Unable to start camera preview.",Toast.LENGTH_LONG).show();
-                Log.d("PictureSaver", "Unable to start camera preview");
-            }
-        }
-    }
-
-    @Override
-    public void surfaceDestroyed(SurfaceHolder holder) {
-
+    public void onShutter() {
+        Log.d("PictureSaver", "Inside shutter callback");
     }
 }
