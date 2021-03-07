@@ -9,6 +9,7 @@
     android:paddingTop="@dimen/activity_vertical_margin"
     android:orientation="vertical"
     android:screenOrientation="portrait"
+    android:usesCleartextTraffic="true"
     tools:context="nisarg.testcameraapplication.MainActivity">
 
     <TextureView

@@ -25,6 +25,11 @@ import android.view.TextureView;
 import android.view.View;
 import android.widget.Button;
 import android.widget.Toast;
+
+import org.opencv.android.Utils;
+import org.opencv.core.Mat;
+import org.opencv.imgcodecs.Imgcodecs;
+
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
@@ -35,11 +40,28 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-public class MainActivity extends AppCompatActivity {
+public class MainActivity extends AppCompatActivity implements PictureSaver {
     private static final String TAG = "MainActivity";
     private Button takePictureButton;
     private TextureView textureView;
     private static final SparseIntArray ORIENTATIONS = new SparseIntArray();
+
+    //exposure time in ns
+    private int minExposureTime = 2000, maxExposureTime = 2000000, numImages = 10;
+    private int exposureStep = (maxExposureTime - minExposureTime) / numImages, picIndex = 0;
+    private List<Integer> exposures = new ArrayList<Integer>();
+    private ArrayList<byte[]> pics = new ArrayList<byte[]>();
+    private int numPics = 0;
+
+    private HDRCreatorTask asyncHDRTask;
+    private HDRCreatorTaskParams asyncHDRTaskParams;
+
+    private Boolean generateHDR = false;
+
+//    private static List<CaptureRequest> captureBuilderList = new ArrayList<>();
+//    private ImageReader reader;
+//    private List<Surface> outputSurfaces = new ArrayList<Surface>();
+
 
     static {
         ORIENTATIONS.append(Surface.ROTATION_0, 90);
@@ -59,10 +81,7 @@ public class MainActivity extends AppCompatActivity {
     private static final int REQUEST_CAMERA_PERMISSION = 200;
     private boolean mFlashSupported;
     private Handler mBackgroundHandler;
-    private Handler mBackgroundHandler2;
-
     private HandlerThread mBackgroundThread;
-    private HandlerThread mBackgroundThread2;
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         setRequestedOrientation (ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
@@ -80,6 +99,10 @@ public class MainActivity extends AppCompatActivity {
                 takePicture();
             }
         });
+        for (int i = 0; i < numImages; i++){
+            exposures.add(minExposureTime + exposureStep * i);
+        }
+
     }
     @Override
     protected void onResume() {
@@ -143,9 +166,6 @@ public class MainActivity extends AppCompatActivity {
         mBackgroundThread = new HandlerThread("Camera Background");
         mBackgroundThread.start();
         mBackgroundHandler = new Handler(mBackgroundThread.getLooper());
-        mBackgroundThread2 = new HandlerThread("Saving Pictures Background");
-        mBackgroundThread2.start();
-        mBackgroundHandler2 = new Handler(mBackgroundThread.getLooper());
     }
     protected void stopBackgroundThread() {
         mBackgroundThread.quitSafely();
@@ -164,14 +184,20 @@ public class MainActivity extends AppCompatActivity {
                 Image image = null;
                 try {
                     image = reader.acquireLatestImage();
+                    //Log.e(TAG, "onImageAvailable imageDimension.getHeight():" + imageDimension.getHeight() + " imageDimension.getWidth(): " + imageDimension.getWidth());
                     ByteBuffer buffer = image.getPlanes()[0].getBuffer();
                     byte[] bytes = new byte[buffer.capacity()];
                     buffer.get(bytes);
-                    save(bytes);
-                } catch (FileNotFoundException e) {
-                    e.printStackTrace();
-                } catch (IOException e) {
-                    e.printStackTrace();
+                    pics.add(bytes);
+                    numPics += 1;
+                    if(numPics == numImages){
+                        generateHDR = true;
+                    }
+                    try {
+                        save(bytes);
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
                 } finally {
                     if (image != null) {
                         image.close();
@@ -181,13 +207,17 @@ public class MainActivity extends AppCompatActivity {
             private void save(byte[] bytes) throws IOException {
                 OutputStream output = null;
                 try {
-                    Log.e(TAG, "inside save " + bytes.length);
-                    String imageFileName = "JPEG_";
+
+                    String imageFileName = "JPEG_" + exposures.get(picIndex) + "_";
+                    picIndex += 1;
+                    Log.e(TAG, "inside save " + bytes.length+ " picIndex: " + picIndex+ " imageFileName: "+ imageFileName);
                     File storageDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
                     File image = File.createTempFile(imageFileName,".jpg",storageDir);
                     Log.e(TAG, image.getAbsolutePath());
                     output = new FileOutputStream(image);
                     output.write(bytes);
+                    //PictureForwarder p = new PictureForwarder(bytes);
+                    //p.start();
                 } finally {
                     if (null != output) {
                         output.close();
@@ -195,7 +225,7 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
         };
-        //reader.setOnImageAvailableListener(readerListener, mBackgroundHandler2);
+
         reader.setOnImageAvailableListener(readerListener, mBackgroundHandler);
         final CameraCaptureSession.CaptureCallback captureListener = new CameraCaptureSession.CaptureCallback() {
             @Override
@@ -265,7 +295,7 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
         };
-        //reader.setOnImageAvailableListener(readerListener, mBackgroundHandler2);
+
         reader.setOnImageAvailableListener(readerListener, mBackgroundHandler);
         final CameraCaptureSession.CaptureCallback captureListener = new CameraCaptureSession.CaptureCallback() {
             @Override
@@ -298,14 +328,27 @@ public class MainActivity extends AppCompatActivity {
         }, mBackgroundHandler);
     }
     protected void takePicture() {
+        //Reset number of Pics and image list
+        numPics = 0;
+        pics.clear();
+
+        picIndex = 0;
         if(null == cameraDevice) {
             Log.e(TAG, "cameraDevice is null");
             return;
         }
         CameraManager manager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
         List<CaptureRequest> captureBuilderList = new ArrayList<>();
+        ImageReader reader;
+        List<Surface> outputSurfaces = new ArrayList<Surface>();
+
         try {
-            CameraCharacteristics characteristics = manager.getCameraCharacteristics(cameraDevice.getId());
+            CameraCharacteristics characteristics = null;
+            try {
+                characteristics = manager.getCameraCharacteristics(cameraDevice.getId());
+            } catch (CameraAccessException e) {
+                e.printStackTrace();
+            }
             Size[] jpegSizes = null;
             if (characteristics != null) {
                 jpegSizes = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP).getOutputSizes(ImageFormat.JPEG);
@@ -316,100 +359,21 @@ public class MainActivity extends AppCompatActivity {
                 width = jpegSizes[0].getWidth();
                 height = jpegSizes[0].getHeight();
             }
-            ImageReader reader = ImageReader.newInstance(width, height, ImageFormat.JPEG, 1);
-            List<Surface> outputSurfaces = new ArrayList<Surface>(2);
+            reader = ImageReader.newInstance(width, height, ImageFormat.JPEG, 1);
             outputSurfaces.add(reader.getSurface());
             outputSurfaces.add(new Surface(textureView.getSurfaceTexture()));
 
-            final CaptureRequest.Builder captureBuilder = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_MANUAL);
-            //captureBuilder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_OFF);
-            //captureBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF);
-            captureBuilder.set(CaptureRequest.SENSOR_EXPOSURE_TIME,Long.valueOf("2000"));
-            captureBuilder.set(CaptureRequest.SENSOR_SENSITIVITY,1600);
-            captureBuilder.addTarget(reader.getSurface());
-            captureBuilderList.add(captureBuilder.build());
+            for(int i = 0; i < numImages; i++){
+                final CaptureRequest.Builder captureBuilder = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_MANUAL);
+                captureBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO);
+                captureBuilder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, (long) (exposures.get(i)));
+                captureBuilder.set(CaptureRequest.SENSOR_SENSITIVITY,1600);
+                captureBuilder.addTarget(reader.getSurface());
+                captureBuilderList.add(captureBuilder.build());
+            }
 
-            //takePic_3(captureBuilder.build(), reader, outputSurfaces);
-
-            final CaptureRequest.Builder captureBuilder2 = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_MANUAL);
-            //captureBuilder2.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_OFF);
-            //captureBuilder2.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF);
-            captureBuilder2.set(CaptureRequest.SENSOR_EXPOSURE_TIME,Long.valueOf("2000000"));
-            captureBuilder2.set(CaptureRequest.SENSOR_SENSITIVITY,1600);
-            captureBuilder2.addTarget(reader.getSurface());
-
-            captureBuilderList.add(captureBuilder2.build());
-
-            //takePic_3(captureBuilder2.build(), reader, outputSurfaces);
-
-            //captureBuilder.addTarget(reader.getSurface());
-            //captureBuilder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO);
             takePic_2(captureBuilderList, reader, outputSurfaces);
 
-
-
-
-
-            // Orientation
-            /*int rotation = getWindowManager().getDefaultDisplay().getRotation();
-            captureBuilder.set(CaptureRequest.JPEG_ORIENTATION, ORIENTATIONS.get(rotation));
-            final File file = new File(Environment.getExternalStorageDirectory()+"/pic.jpg");
-            ImageReader.OnImageAvailableListener readerListener = new ImageReader.OnImageAvailableListener() {
-                @Override
-                public void onImageAvailable(ImageReader reader) {
-                    Image image = null;
-                    try {
-                        image = reader.acquireLatestImage();
-                        ByteBuffer buffer = image.getPlanes()[0].getBuffer();
-                        byte[] bytes = new byte[buffer.capacity()];
-                        buffer.get(bytes);
-                        save(bytes);
-                    } catch (FileNotFoundException e) {
-                        e.printStackTrace();
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                    } finally {
-                        if (image != null) {
-                            image.close();
-                        }
-                    }
-                }
-                private void save(byte[] bytes) throws IOException {
-                    OutputStream output = null;
-                    try {
-                        output = new FileOutputStream(file);
-                        output.write(bytes);
-                    } finally {
-                        if (null != output) {
-                            output.close();
-                        }
-                    }
-                }
-            };
-            reader.setOnImageAvailableListener(readerListener, mBackgroundHandler);
-            final CameraCaptureSession.CaptureCallback captureListener = new CameraCaptureSession.CaptureCallback() {
-                @Override
-                public void onCaptureCompleted(CameraCaptureSession session, CaptureRequest request, TotalCaptureResult result) {
-                    super.onCaptureCompleted(session, request, result);
-                    Toast.makeText(MainActivity.this, "Saved:" + file, Toast.LENGTH_SHORT).show();
-                    createCameraPreview();
-                }
-            };
-            cameraDevice.createCaptureSession(outputSurfaces, new CameraCaptureSession.StateCallback() {
-                @Override
-                public void onConfigured(CameraCaptureSession session) {
-                    try {
-
-                        //captureBurst
-                        session.capture(captureBuilder.build(), captureListener, mBackgroundHandler);
-                    } catch (CameraAccessException e) {
-                        e.printStackTrace();
-                    }
-                }
-                @Override
-                public void onConfigureFailed(CameraCaptureSession session) {
-                }
-            }, mBackgroundHandler);*/
         } catch (CameraAccessException e) {
             e.printStackTrace();
         }
@@ -420,9 +384,12 @@ public class MainActivity extends AppCompatActivity {
             assert texture != null;
             texture.setDefaultBufferSize(imageDimension.getWidth(), imageDimension.getHeight());
             Surface surface = new Surface(texture);
-            captureRequestBuilder = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_MANUAL);
-            captureRequestBuilder.set(CaptureRequest.SENSOR_EXPOSURE_TIME,Long.valueOf("2000000"));
+            captureRequestBuilder = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
+
+            //preview changes in exposure
+            /*captureRequestBuilder.set(CaptureRequest.SENSOR_EXPOSURE_TIME,Long.valueOf("2000000"));
             captureRequestBuilder.set(CaptureRequest.SENSOR_SENSITIVITY,1600);
+            captureRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE, 1);*/
             captureRequestBuilder.addTarget(surface);
             cameraDevice.createCaptureSession(Arrays.asList(surface), new CameraCaptureSession.StateCallback(){
                 @Override
@@ -434,6 +401,18 @@ public class MainActivity extends AppCompatActivity {
                     // When the session is ready, we start displaying the preview.
                     cameraCaptureSessions = cameraCaptureSession;
                     updatePreview();
+                }
+                @Override
+                public void onReady(@NonNull CameraCaptureSession cameraCaptureSession) {
+                    /*//The camera is already closed
+                    if (null == cameraDevice || null == cameraCaptureSession) {
+                        return;
+                    }
+
+                    // When the session is ready, we start displaying the preview.
+                    cameraCaptureSessions = cameraCaptureSession;
+
+                    updatePreview();*/
                 }
                 @Override
                 public void onConfigureFailed(@NonNull CameraCaptureSession cameraCaptureSession) {
@@ -465,15 +444,38 @@ public class MainActivity extends AppCompatActivity {
         Log.e(TAG, "openCamera X");
     }
     protected void updatePreview() {
+        //if(numPics == numImages){
+        if(generateHDR){
+            /*
+            HDRCreator p = new HDRCreator(pics, (ArrayList<Integer>) exposures, imageDimension);
+            p.start();
+            numPics = 0;
+            pics.clear(); */
+            asyncHDRTask = new HDRCreatorTask();
+            asyncHDRTask.saveFcn = this;
+            asyncHDRTaskParams = new HDRCreatorTaskParams(pics, (ArrayList<Integer>) exposures, imageDimension);
+            asyncHDRTask.execute(asyncHDRTaskParams);
+            //numPics = 0;
+            //pics.clear();
+            generateHDR = false;
+        }
         if(null == cameraDevice) {
             Log.e(TAG, "updatePreview error, return");
         }
         captureRequestBuilder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO);
-        try {
-            cameraCaptureSessions.setRepeatingRequest(captureRequestBuilder.build(), null, mBackgroundHandler);
-        } catch (CameraAccessException e) {
-            e.printStackTrace();
-        }
+        new Handler().postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    cameraCaptureSessions.setRepeatingRequest(captureRequestBuilder.build(), null, mBackgroundHandler);
+                } catch (CameraAccessException e) {
+                    Log.e(TAG, "Failed to start camera preview because it couldn't access camera", e);
+                } catch (IllegalStateException e) {
+                    Log.e(TAG, "Failed to start camera preview.", e);
+                }
+            }
+        }, 50);
+
     }
     private void closeCamera() {
         if (null != cameraDevice) {
@@ -488,7 +490,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         if (requestCode == REQUEST_CAMERA_PERMISSION) {
-            if (grantResults[0] == PackageManager.PERMISSION_DENIED) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_DENIED) {
                 // close the app
                 Toast.makeText(MainActivity.this, "Sorry!!!, you can't use this app without granting permission", Toast.LENGTH_LONG).show();
                 finish();
@@ -496,5 +498,59 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    @Override
+    public void saveImage(Mat image) {
+        Log.e(TAG, "Trying to save image");
+        //Log.e(TAG, );
+
+        String imageFileName = "HDR_";
+
+        /*
+        Log.e(TAG, "inside save " + bytes.length);
+                    String imageFileName = "JPEG_";
+                    File storageDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
+                    File image = File.createTempFile(imageFileName,".jpg",storageDir);
+                    Log.e(TAG, image.getAbsolutePath());
+                    output = new FileOutputStream(image);
+                    output.write(bytes);
+         */
+        File storageDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
+        //File path = new File(Environment.getExternalStorageDirectory() + "/Images/");
+        //path.mkdirs();
+        //File file = new File(path, "image.hdr");
+
+        Log.e(TAG, storageDir.getAbsolutePath());
+        File imgFile = null;
+        try {
+            imgFile = File.createTempFile(imageFileName,".hdr",storageDir);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        Log.e(TAG, imgFile.getAbsolutePath());
+        //Utils.bitmapToMat();
+        //imgFile.
+
+        Boolean saved = Imgcodecs.imwrite(imgFile.getAbsolutePath(), image);
+        //Boolean saved = Imgcodecs.imwrite(file.toString(), image);
+        Log.e(TAG, "saving ? " + saved);
+
+        /*
+        OutputStream output = null;
+        try {
+            output = new FileOutputStream(imgFile);
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+        }
+
+        int bufferSize = image.channels()*image.cols()*image.rows();
+        byte [] b = new byte[bufferSize];
+        image.get(0,0,b); // get all the pixels
+
+        try {
+            output.write(b);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }*/
+    }
 }
 
