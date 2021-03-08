@@ -6,7 +6,15 @@ import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.graphics.ImageFormat;
 import android.graphics.SurfaceTexture;
-import android.hardware.camera2.*;
+import android.hardware.camera2.CameraAccessException;
+import android.hardware.camera2.CameraCaptureSession;
+import android.hardware.camera2.CameraCharacteristics;
+import android.hardware.camera2.CameraDevice;
+import android.hardware.camera2.CameraManager;
+import android.hardware.camera2.CameraMetadata;
+import android.hardware.camera2.CaptureFailure;
+import android.hardware.camera2.CaptureRequest;
+import android.hardware.camera2.TotalCaptureResult;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.media.Image;
 import android.media.ImageReader;
@@ -14,19 +22,18 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.HandlerThread;
-import androidx.annotation.NonNull;
-import androidx.core.app.ActivityCompat;
-import androidx.appcompat.app.AppCompatActivity;
 import android.util.Log;
 import android.util.Size;
-import android.util.SparseIntArray;
 import android.view.Surface;
 import android.view.TextureView;
 import android.view.View;
 import android.widget.Button;
 import android.widget.Toast;
 
-import org.opencv.android.Utils;
+import androidx.annotation.NonNull;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
+
 import org.opencv.core.Mat;
 import org.opencv.imgcodecs.Imgcodecs;
 
@@ -44,42 +51,27 @@ public class MainActivity extends AppCompatActivity implements PictureSaver {
     private static final String TAG = "MainActivity";
     private Button takePictureButton;
     private TextureView textureView;
-    private static final SparseIntArray ORIENTATIONS = new SparseIntArray();
 
     //exposure time in ns
     private int minExposureTime = 2000, maxExposureTime = 2000000, numImages = 10;
     private int exposureStep = (maxExposureTime - minExposureTime) / numImages, picIndex = 0;
     private List<Integer> exposures = new ArrayList<Integer>();
     private ArrayList<byte[]> pics = new ArrayList<byte[]>();
-    private int numPics = 0;
+    private int numPicsTaken = 0;
 
+    //Flag for AsyncTask to be created+ran
+    private Boolean generateHDR = false;
     private HDRCreatorTask asyncHDRTask;
     private HDRCreatorTaskParams asyncHDRTaskParams;
 
-    private Boolean generateHDR = false;
-
-//    private static List<CaptureRequest> captureBuilderList = new ArrayList<>();
-//    private ImageReader reader;
-//    private List<Surface> outputSurfaces = new ArrayList<Surface>();
-
-
-    static {
-        ORIENTATIONS.append(Surface.ROTATION_0, 90);
-        ORIENTATIONS.append(Surface.ROTATION_90, 0);
-        ORIENTATIONS.append(Surface.ROTATION_180, 270);
-        ORIENTATIONS.append(Surface.ROTATION_270, 180);
-    }
 
     private String cameraId;
     protected CameraDevice cameraDevice;
     protected CameraCaptureSession cameraCaptureSessions;
-    protected CaptureRequest captureRequest;
     protected CaptureRequest.Builder captureRequestBuilder;
     private Size imageDimension;
     private ImageReader imageReader;
-    private File file;
     private static final int REQUEST_CAMERA_PERMISSION = 200;
-    private boolean mFlashSupported;
     private Handler mBackgroundHandler;
     private HandlerThread mBackgroundThread;
     @Override
@@ -95,10 +87,13 @@ public class MainActivity extends AppCompatActivity implements PictureSaver {
         takePictureButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                //Toast.makeText(MainActivity.this, "Pressed button - will take pic in future", Toast.LENGTH_SHORT).show();
+                Toast.makeText(MainActivity.this, "Taking bracketed exposure pictures.", Toast.LENGTH_SHORT).show();
                 takePicture();
             }
         });
+
+        // Initialize the array of exposures we want (in ns)
+        // TODO: increment bracketed exposures by powers of 2
         for (int i = 0; i < numImages; i++){
             exposures.add(minExposureTime + exposureStep * i);
         }
@@ -126,12 +121,10 @@ public class MainActivity extends AppCompatActivity implements PictureSaver {
     TextureView.SurfaceTextureListener textureListener = new TextureView.SurfaceTextureListener() {
         @Override
         public void onSurfaceTextureAvailable(SurfaceTexture surface, int width, int height) {
-            //open your camera here
             openCamera();
         }
         @Override
         public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int width, int height) {
-            // Transform you image captured size according to the surface width and height
         }
         @Override
         public boolean onSurfaceTextureDestroyed(SurfaceTexture surface) {
@@ -146,8 +139,7 @@ public class MainActivity extends AppCompatActivity implements PictureSaver {
     private final CameraDevice.StateCallback stateCallback = new CameraDevice.StateCallback() {
         @Override
         public void onOpened(CameraDevice camera) {
-            //This is called when the camera is open
-            Log.e(TAG, "onOpened");
+            Log.i(TAG, "Camera opened");
             cameraDevice = camera;
             createCameraPreview();
         }
@@ -177,27 +169,29 @@ public class MainActivity extends AppCompatActivity implements PictureSaver {
             e.printStackTrace();
         }
     }
-    protected void takePic_2(final List<CaptureRequest> captureBuilderList, ImageReader reader, List<Surface> outputSurfaces) throws CameraAccessException {
+    protected void takeMultiplePictures(final List<CaptureRequest> captureBuilderList, ImageReader reader, List<Surface> outputSurfaces) throws CameraAccessException {
         ImageReader.OnImageAvailableListener readerListener = new ImageReader.OnImageAvailableListener() {
             @Override
             public void onImageAvailable(ImageReader reader) {
                 Image image = null;
                 try {
                     image = reader.acquireLatestImage();
-                    //Log.e(TAG, "onImageAvailable imageDimension.getHeight():" + imageDimension.getHeight() + " imageDimension.getWidth(): " + imageDimension.getWidth());
+                    Log.i(TAG, "onImageAvailable imageDimension.getHeight():" + imageDimension.getHeight() + " imageDimension.getWidth(): " + imageDimension.getWidth());
                     ByteBuffer buffer = image.getPlanes()[0].getBuffer();
                     byte[] bytes = new byte[buffer.capacity()];
                     buffer.get(bytes);
                     pics.add(bytes);
-                    numPics += 1;
-                    if(numPics == numImages){
+                    numPicsTaken += 1;
+                    if(numPicsTaken == numImages){
                         generateHDR = true;
                     }
+                    //Uncomment to save bracketed exposure pictures
+                    /*
                     try {
                         save(bytes);
                     } catch (IOException e) {
                         e.printStackTrace();
-                    }
+                    }*/
                 } finally {
                     if (image != null) {
                         image.close();
@@ -245,8 +239,6 @@ public class MainActivity extends AppCompatActivity implements PictureSaver {
             public void onConfigured(CameraCaptureSession session) {
                 try {
                     session.captureBurst(captureBuilderList, captureListener, mBackgroundHandler);
-                    //captureBurst
-                    //session.capture(captureBuilder.build(), captureListener, mBackgroundHandler);
                 } catch (CameraAccessException e) {
                     e.printStackTrace();
                 }
@@ -257,7 +249,7 @@ public class MainActivity extends AppCompatActivity implements PictureSaver {
         }, mBackgroundHandler);
     }
 
-    protected void takePic_3(final CaptureRequest captureBuilderRequest, ImageReader reader, List<Surface> outputSurfaces) throws CameraAccessException {
+    protected void takeOnePicture(final CaptureRequest captureBuilderRequest, ImageReader reader, List<Surface> outputSurfaces) throws CameraAccessException {
         ImageReader.OnImageAvailableListener readerListener = new ImageReader.OnImageAvailableListener() {
             @Override
             public void onImageAvailable(ImageReader reader) {
@@ -329,7 +321,7 @@ public class MainActivity extends AppCompatActivity implements PictureSaver {
     }
     protected void takePicture() {
         //Reset number of Pics and image list
-        numPics = 0;
+        numPicsTaken = 0;
         pics.clear();
 
         picIndex = 0;
@@ -372,7 +364,7 @@ public class MainActivity extends AppCompatActivity implements PictureSaver {
                 captureBuilderList.add(captureBuilder.build());
             }
 
-            takePic_2(captureBuilderList, reader, outputSurfaces);
+            takeMultiplePictures(captureBuilderList, reader, outputSurfaces);
 
         } catch (CameraAccessException e) {
             e.printStackTrace();
@@ -385,11 +377,6 @@ public class MainActivity extends AppCompatActivity implements PictureSaver {
             texture.setDefaultBufferSize(imageDimension.getWidth(), imageDimension.getHeight());
             Surface surface = new Surface(texture);
             captureRequestBuilder = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
-
-            //preview changes in exposure
-            /*captureRequestBuilder.set(CaptureRequest.SENSOR_EXPOSURE_TIME,Long.valueOf("2000000"));
-            captureRequestBuilder.set(CaptureRequest.SENSOR_SENSITIVITY,1600);
-            captureRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE, 1);*/
             captureRequestBuilder.addTarget(surface);
             cameraDevice.createCaptureSession(Arrays.asList(surface), new CameraCaptureSession.StateCallback(){
                 @Override
@@ -404,15 +391,6 @@ public class MainActivity extends AppCompatActivity implements PictureSaver {
                 }
                 @Override
                 public void onReady(@NonNull CameraCaptureSession cameraCaptureSession) {
-                    /*//The camera is already closed
-                    if (null == cameraDevice || null == cameraCaptureSession) {
-                        return;
-                    }
-
-                    // When the session is ready, we start displaying the preview.
-                    cameraCaptureSessions = cameraCaptureSession;
-
-                    updatePreview();*/
                 }
                 @Override
                 public void onConfigureFailed(@NonNull CameraCaptureSession cameraCaptureSession) {
@@ -425,7 +403,7 @@ public class MainActivity extends AppCompatActivity implements PictureSaver {
     }
     private void openCamera() {
         CameraManager manager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
-        Log.e(TAG, "is camera open");
+        Log.i(TAG, "opening Camera");
         try {
             cameraId = manager.getCameraIdList()[0];
             CameraCharacteristics characteristics = manager.getCameraCharacteristics(cameraId);
@@ -438,31 +416,29 @@ public class MainActivity extends AppCompatActivity implements PictureSaver {
                 return;
             }
             manager.openCamera(cameraId, stateCallback, null);
+            Log.i(TAG, "opened Camera");
         } catch (CameraAccessException e) {
             e.printStackTrace();
         }
-        Log.e(TAG, "openCamera X");
     }
     protected void updatePreview() {
-        //if(numPics == numImages){
+
+        // If we have taken all the necessary pictures in `TakePicture()`
+        //      go ahead and start up the AsyncTask to generate the HDR image
         if(generateHDR){
-            /*
-            HDRCreator p = new HDRCreator(pics, (ArrayList<Integer>) exposures, imageDimension);
-            p.start();
-            numPics = 0;
-            pics.clear(); */
             asyncHDRTask = new HDRCreatorTask();
             asyncHDRTask.saveFcn = this;
             asyncHDRTaskParams = new HDRCreatorTaskParams(pics, (ArrayList<Integer>) exposures, imageDimension);
             asyncHDRTask.execute(asyncHDRTaskParams);
-            //numPics = 0;
-            //pics.clear();
             generateHDR = false;
         }
         if(null == cameraDevice) {
             Log.e(TAG, "updatePreview error, return");
         }
         captureRequestBuilder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO);
+
+        //Hack to fix a camera open crash after taking a burst of pictures
+        // TODO: investigate a proper fix
         new Handler().postDelayed(new Runnable() {
             @Override
             public void run() {
@@ -500,57 +476,21 @@ public class MainActivity extends AppCompatActivity implements PictureSaver {
 
     @Override
     public void saveImage(Mat image) {
-        Log.e(TAG, "Trying to save image");
-        //Log.e(TAG, );
-
+        Log.i(TAG, "Trying to save image");
         String imageFileName = "HDR_";
 
-        /*
-        Log.e(TAG, "inside save " + bytes.length);
-                    String imageFileName = "JPEG_";
-                    File storageDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
-                    File image = File.createTempFile(imageFileName,".jpg",storageDir);
-                    Log.e(TAG, image.getAbsolutePath());
-                    output = new FileOutputStream(image);
-                    output.write(bytes);
-         */
         File storageDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
-        //File path = new File(Environment.getExternalStorageDirectory() + "/Images/");
-        //path.mkdirs();
-        //File file = new File(path, "image.hdr");
-
-        Log.e(TAG, storageDir.getAbsolutePath());
+        Log.i(TAG, storageDir.getAbsolutePath());
         File imgFile = null;
         try {
             imgFile = File.createTempFile(imageFileName,".hdr",storageDir);
         } catch (IOException e) {
             e.printStackTrace();
         }
-        Log.e(TAG, imgFile.getAbsolutePath());
-        //Utils.bitmapToMat();
-        //imgFile.
 
+        Log.i(TAG, imgFile.getAbsolutePath());
         Boolean saved = Imgcodecs.imwrite(imgFile.getAbsolutePath(), image);
-        //Boolean saved = Imgcodecs.imwrite(file.toString(), image);
-        Log.e(TAG, "saving ? " + saved);
-
-        /*
-        OutputStream output = null;
-        try {
-            output = new FileOutputStream(imgFile);
-        } catch (FileNotFoundException e) {
-            e.printStackTrace();
-        }
-
-        int bufferSize = image.channels()*image.cols()*image.rows();
-        byte [] b = new byte[bufferSize];
-        image.get(0,0,b); // get all the pixels
-
-        try {
-            output.write(b);
-        } catch (IOException e) {
-            e.printStackTrace();
-        }*/
+        Log.i(TAG, "saving ? " + saved);
     }
 }
 

@@ -1,7 +1,6 @@
 package nisarg.testcameraapplication;
 
 import java.util.ArrayList;
-import android.util.Size;
 
 public class HDRCreatorTaskParams {
     ArrayList<byte[]> paramsPics;
