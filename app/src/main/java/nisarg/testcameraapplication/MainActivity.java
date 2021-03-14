@@ -181,10 +181,13 @@ public class MainActivity extends AppCompatActivity implements PictureSaver {
                     byte[] bytes = new byte[buffer.capacity()];
                     buffer.get(bytes);
                     pics.add(bytes);
+                    Log.i(TAG, "bytes.length: " + bytes.length + " image.getPlanes()[0].getPixelStride(): " + image.getPlanes()[0].getPixelStride() + " image.getPlanes()[0].getRowStride(): " + image.getPlanes()[0].getRowStride());
+                    Log.i(TAG, "image.getFormat(): " + image.getFormat());
                     numPicsTaken += 1;
                     if(numPicsTaken == numImages){
                         generateHDR = true;
                     }
+                    //DEBUG
                     //Uncomment to save bracketed exposure pictures
                     /*
                     try {
@@ -351,7 +354,12 @@ public class MainActivity extends AppCompatActivity implements PictureSaver {
                 width = jpegSizes[0].getWidth();
                 height = jpegSizes[0].getHeight();
             }
+
+            //ImageReader with ImageFormat = JPEG
             reader = ImageReader.newInstance(width, height, ImageFormat.JPEG, 1);
+            //reader = ImageReader.newInstance(width, height, ImageFormat.RAW10, 1);
+            //reader = ImageReader.newInstance(width, height, ImageFormat.FLEX_RGB_888, 1);
+
             outputSurfaces.add(reader.getSurface());
             outputSurfaces.add(new Surface(textureView.getSurfaceTexture()));
 
@@ -431,6 +439,8 @@ public class MainActivity extends AppCompatActivity implements PictureSaver {
             asyncHDRTaskParams = new HDRCreatorTaskParams(pics, (ArrayList<Integer>) exposures, imageDimension);
             asyncHDRTask.execute(asyncHDRTaskParams);
             generateHDR = false;
+            numPicsTaken = 0;
+            pics.clear();
         }
         if(null == cameraDevice) {
             Log.e(TAG, "updatePreview error, return");

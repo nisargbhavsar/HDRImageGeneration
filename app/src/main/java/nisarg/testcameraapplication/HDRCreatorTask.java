@@ -16,6 +16,7 @@ import org.opencv.photo.MergeDebevec;
 import org.opencv.photo.MergeMertens;
 import org.opencv.photo.Photo;
 import org.opencv.photo.Tonemap;
+import org.opencv.imgcodecs.Imgcodecs; // imread, imwrite, etc
 
 import java.util.ArrayList;
 import java.util.List;
@@ -29,7 +30,7 @@ public class HDRCreatorTask extends AsyncTask<HDRCreatorTaskParams, Void, Mat> {
     private List<Mat> bracketedPictures = new ArrayList<Mat>();
 
     //List of exposure times in ns
-    private List<Integer> exposures = new ArrayList<Integer>();
+    private List<Float> exposures = new ArrayList<Float>();
     private Size picSizePixels;
     private CameraBridgeViewBase mOpenCvCameraView;
 
@@ -42,12 +43,27 @@ public class HDRCreatorTask extends AsyncTask<HDRCreatorTaskParams, Void, Mat> {
         Log.i(TAG, "picSizePixels.height: " +picSizePixels.height + " picSizePixels.width " + picSizePixels.width);
 
         for(int i = 0; i < params[0].paramsPics.size(); i++){
-            Mat img = new MatOfByte(params[0].paramsPics.get(i));
-            Imgproc.resize(img, img, picSizePixels);
-            bracketedPictures.add(img);
+            //Mat img = new MatOfByte(params[0].paramsPics.get(i));
+            //Imgproc.resize(img, img, picSizePixels);
+            Mat jpegData = new Mat(1, params[0].paramsPics.get(i).length, CvType.CV_8UC1);
+            jpegData.put(0, 0, params[0].paramsPics.get(i));
+
+
+            Mat bgrMat = new Mat();
+            bgrMat = Imgcodecs.imdecode(jpegData, Imgcodecs.IMREAD_COLOR);
+            bracketedPictures.add(bgrMat);
         }
+
+        //DEBUG
+        /*
+        Mat debugImg = bracketedPictures.get(0);
+        for(int row = 0; row < debugImg.rows(); row++) {
+            for (int col = 0; col < debugImg.cols(); col++) {
+                Log.i(TAG, "debugImg.get(row: " + row + ",col: " + col + "): " + debugImg.get(row,col));
+            }
+        }*/
         Log.i(TAG, "bracketedPictures.size(): "+ bracketedPictures.size());
-        exposures = (List<Integer>) params[0].paramsExposures.clone();
+        exposures = (List<Float>) params[0].paramsExposures.clone();
 
         Log.i(TAG, "bracketedPictures.size(): "+ bracketedPictures.size());
         Mat response = new Mat();
@@ -74,7 +90,19 @@ public class HDRCreatorTask extends AsyncTask<HDRCreatorTaskParams, Void, Mat> {
         mergeMertens.process(bracketedPictures, fusion);
         Core.multiply(fusion, new Scalar(255,255,255), fusion);
         Core.multiply(ldr, new Scalar(255,255,255), ldr);
-        return ldr.clone();
+        //return ldr.clone();
+        //return bracketedPictures.get(5);
+
+        //DEBUG
+        /*
+        for(int row = 0; row < hdr.rows(); row++) {
+            for (int col = 0; col < hdr.cols(); col++) {
+                double[] pixels = hdr.get(row,col);
+                Log.i(TAG, "hdr.get(row: " + row + ", col: " + col + "): " + pixels[0] + " " + pixels[1] + " " + pixels[2] );
+            }
+        }*/
+
+        return hdr;
     }
 
     @Override
